@@ -1,8 +1,93 @@
+// ==================================================================
+//  <<< FILE sync_order.js - PHIÊN BẢN DELAY 5 GIÂY >>>
+// ==================================================================
+
+console.log('[DEBUG-ETS-CS] 1. File sync_order.js đã được tiêm vào trang.');
+
+/**
+ * Hàm này quét TOÀN BỘ các thẻ script trên trang để tìm và trích xuất dữ liệu.
+ * @returns {object|null}
+ */
+const extractDataFromAllScripts = () => {
+  console.log('[DEBUG-ETS-CS] 4. Bắt đầu quét tất cả các thẻ script trên trang...');
+  try {
+    const scripts = document.getElementsByTagName('script');
+    console.log(`[DEBUG-ETS-CS] 4.1. Tìm thấy tổng cộng ${scripts.length} thẻ script để quét.`);
+
+    for (let i = 0; i < scripts.length; i++) {
+      const script = scripts[i];
+
+      // <<< DÒNG LOG MỚI THÊM VÀO >>>
+      // In ra một đoạn preview của script để tiện debug
+      console.log(`[DEBUG-ETS-CS] 4.2. Đang quét script thứ ${i}. Nội dung bắt đầu bằng: `, script.innerHTML.substring(0, 250));
+
+      // Chỉ quét những script có nội dung bên trong
+      if (script.innerHTML && script.innerHTML.includes('Etsy.Context')) {
+        const match = script.innerHTML.match(/Etsy\.Context\s*=\s*({.*});/);
+        if (match && match[1]) {
+          console.log('[DEBUG-ETS-CS] 4.3. Đã tìm thấy khối JSON của Etsy.Context trong script này.');
+          const contextData = JSON.parse(match[1]);
+          const initialData = contextData?.data?.initial_data?.orders?.orders_search;
+
+          if (initialData && initialData.orders && initialData.buyers) {
+            console.log('[DEBUG-ETS-CS] 4.4. TRÍCH XUẤT THÀNH CÔNG!', initialData);
+            return initialData; // Trả về ngay khi tìm thấy
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error('[DEBUG-ETS-CS] 4.5. LỖI trong quá trình quét và trích xuất!', error);
+  }
+
+  console.log('[DEBUG-ETS-CS] 4.6. Quét xong tất cả các script nhưng không tìm thấy dữ liệu hợp lệ.');
+  return null;
+};
+
+
+// Hàm này sẽ được gọi để bắt đầu toàn bộ quá trình
+const mainProcess = () => {
+  console.log('[DEBUG-ETS-CS] 3. Bắt đầu quá trình trích xuất.');
+  const rawOrderData = extractDataFromAllScripts();
+  console.log('[DEBUG-ETS-CS] 5. Kết quả cuối cùng:', rawOrderData);
+
+  if (rawOrderData) {
+    console.log('[DEBUG-ETS-CS] 6. Gửi dữ liệu thô lên background để xử lý.');
+    chrome.runtime.sendMessage({
+      message: "orderInfo",
+      data: rawOrderData
+    });
+    // alert("Đã tìm thấy dữ liệu đơn hàng từ HTML và gửi đi xử lý.");
+  } else {
+    console.log('[DEBUG-ETS-CS] 7. Không tìm thấy dữ liệu trong HTML. Sẽ dựa vào cơ chế cũ (bắt request mạng).');
+  }
+}
+
+
+// ==================================================================
+// <<< KHỐI CODE KHỞI ĐỘNG CHÍNH (SỬ DỤNG window.onload và setTimeout) >>>
+// ==================================================================
+window.addEventListener('load', function () {
+  console.log('[DEBUG-ETS-CS] 2. Sự kiện window.onload đã được kích hoạt (toàn bộ trang đã tải).');
+
+  // Chỉ chạy nếu đây là trang danh sách đơn hàng đã bán
+  if (window.location.href.includes('/your/orders/sold')) {
+    const delayInSeconds = 5;
+    console.log(`[DEBUG-ETS-CS] 2.1. Trang hợp lệ. Sẽ bắt đầu lấy dữ liệu sau ${delayInSeconds} giây nữa.`);
+
+    setTimeout(mainProcess, delayInSeconds * 1000);
+
+  } else {
+    console.log('[DEBUG-ETS-CS] 2.2. Đây không phải trang /your/orders/sold, bỏ qua.');
+  }
+});
+
+
 const orderNotFound = `
    <div class="om-not-found-wrap">
       <div style="padding:20px 10px;"><img style="width:30px;object-fit:cover;" src="${chrome.runtime.getURL(
-        "assets/images/not-found.png",
-      )}"/></div>
+    "assets/images/not-found.png",
+)}"/></div>
       <div class="om-text-not-found" >Orders not found</div>
    </div>
 `;
@@ -10,8 +95,8 @@ const orderNotFound = `
 const syncedAllOrders = `
    <div class="om-synced-all-wrap">
       <div style="padding:20px 10px;"><img style="width:30px;object-fit:cover;" src="${chrome.runtime.getURL(
-        "assets/images/completed.png",
-      )}"/></div>
+    "assets/images/completed.png",
+)}"/></div>
       <div class="om-text-synced-all" >All orders were synced to MB</div>
    </div>
 `;
@@ -37,8 +122,8 @@ const addStatusLabel = (orderInfos) => {
     const orderId = item?.find("button[orderid]").attr("orderid");
     if (!orderId || !orderInfos[orderId]) continue;
     item
-      .find(".flag-body.wt-vertical-align-top")
-      .attr("data-order-id", orderId);
+        .find(".flag-body.wt-vertical-align-top")
+        .attr("data-order-id", orderId);
     // item.find(`.flag-img [role="tablist"]`).attr("data-order-id", orderId);
 
     // Set attribute data-order-id.
@@ -47,8 +132,8 @@ const addStatusLabel = (orderInfos) => {
     $(p).attr("data-order-id", orderId);
     const addLabelXpath = ".flag .col-group .col-md-4";
     item
-      .find(addLabelXpath)
-      .append(`<div class="wt-mt-xs-2 om-order-info"></div>`);
+        .find(addLabelXpath)
+        .append(`<div class="wt-mt-xs-2 om-order-info"></div>`);
     const elem = item.find(addLabelXpath + " .om-order-info");
     const { status, trackingCode } = orderInfos[orderId];
     switch (status) {
@@ -145,12 +230,12 @@ const calcu = (val, convertVal) => {
   return Number((val / convertVal).toFixed(2));
 };
 
-const appendOrdersIntoTable = (data) => {
+const appendOrdersIntoTable = async (data) => { // Thêm async
   removeTableLoading();
   if (!data) return;
   const { orders, mbInfos = {} } = data;
   const countUnsyncOrders = Object.values(mbInfos).filter(
-    (item) => item.status === "Not Synced",
+      (item) => item.status === "Not Synced",
   ).length;
   if (countUnsyncOrders == 0) {
     $(".om-table tbody").empty();
@@ -165,7 +250,7 @@ const appendOrdersIntoTable = (data) => {
 
   let convert = false;
   let convertVal = 1;
-  let currencyConvert = getCookie("currencyConvert");
+  let { currencyConvert } = await getStorageData("currencyConvert"); // Dòng mới
   if (currencyConvert && typeof currencyConvert === "string") {
     currencyConvert = JSON.parse(currencyConvert);
     convert = !!currencyConvert.checked;
@@ -176,7 +261,7 @@ const appendOrdersIntoTable = (data) => {
     // add order into not sync table
     if (!order || !mbInfos || !mbInfos[order.orderId]) continue;
     const { status, trackingCode, shippingCarrierCode } =
-      mbInfos[order.orderId];
+        mbInfos[order.orderId];
 
     if (convert && convertVal) {
       const {
@@ -208,24 +293,24 @@ const appendOrdersIntoTable = (data) => {
     }
 
     const style =
-      "border: 1px solid #d9d9d9;border-radius: 5px;box-shadow: none;padding-left: 5px;width:50px;";
+        "border: 1px solid #d9d9d9;border-radius: 5px;box-shadow: none;padding-left: 5px;width:50px;";
     if (status === "Not Synced") {
       hasNotSync = true;
       if (!$(`#not_synced tr[data-order-id="${order.orderId}"]`).length) {
         $("#not_synced .om-table tbody").append(`
                <tr data-order-id="${order.orderId}">
                   <td class="force-sync-item"><input data-order="${b64Encode(
-                    order,
-                  )}" class="om-checkbox" type="checkbox"></td>
+            order,
+        )}" class="om-checkbox" type="checkbox"></td>
                   <td> <img class="om-img-50" src="${
-                    order.items[0].image
-                  }" /></td>
+            order.items[0].image
+        }" /></td>
                   <td>${order.orderId}</td>
                   <td>
                     <div style="display:flex;gap: 10px;">
                       <button class="sync-order-item om-btn" data-order-id="${
-                        order.orderId
-                      }" data-order="${b64Encode(order)}">Sync</button>
+            order.orderId
+        }" data-order="${b64Encode(order)}">Sync</button>
                       <input title="split count" type="number" class="split-order" value="1" min="1" style="${style}"/>
                     </div>
                   </td>
@@ -240,15 +325,15 @@ const appendOrdersIntoTable = (data) => {
         $("#ignored .om-table tbody").append(`
                <tr data-order-id="${order.orderId}">
                   <td class="force-revert-item"><input data-order="${b64Encode(
-                    order,
-                  )}" class="om-checkbox" type="checkbox"></td>
+            order,
+        )}" class="om-checkbox" type="checkbox"></td>
                   <td> <img class="om-img-50" src="${
-                    order.items[0].image
-                  }" /></td>
+            order.items[0].image
+        }" /></td>
                   <td>${order.orderId}</td>
                   <td><button class="revert-order-item om-btn" data-order-id="${
-                    order.orderId
-                  }" data-order="${b64Encode(order)}">Revert</button></td>
+            order.orderId
+        }" data-order="${b64Encode(order)}">Revert</button></td>
                </tr>
             `);
       }
@@ -328,6 +413,7 @@ chrome.runtime.onMessage.addListener(async function (req, sender, res) {
     if (!data) {
       return;
     }
+    console.log('[DEBUG-ETS-CS] 9. Nhận được dữ liệu đã xử lý từ background. Bắt đầu hiển thị ra bảng.', data);
     const { error } = data || {};
     if (error) {
       notifyError("Check synced order: " + data.error);
@@ -338,8 +424,8 @@ chrome.runtime.onMessage.addListener(async function (req, sender, res) {
 
     if (data?.orders?.length > 0) {
       // Auto sync
-      const isAuto = getCookie("_mb_auto");
-      const autoKey = getCookie("_mb_auto_key");
+      const { _mb_auto: isAuto, _mb_auto_key: autoKey } = await getStorageData(["_mb_auto", "_mb_auto_key"]); // Dòng mới
+
       if (isAuto && autoKey) {
         $(".om-addon #not_synced #sync-order").trigger("click");
         return;
@@ -398,15 +484,15 @@ chrome.runtime.onMessage.addListener(async function (req, sender, res) {
           $("#not_synced .om-table").append(`
                   <tr data-order-id="${order.orderId}">
                      <td class="force-sync-item"><input data-order="${b64Encode(
-                       order,
-                     )}" class="om-checkbox" type="checkbox"></td>
+              order,
+          )}" class="om-checkbox" type="checkbox"></td>
                      <td> <img class="om-img-50" src="${
-                       order.items[0].image
-                     }" /></td>
+              order.items[0].image
+          }" /></td>
                      <td>${order.orderId}</td>
                      <td><button class="sync-order-item om-btn" data-order-id="${
-                       order.orderId
-                     }" data-order="${b64Encode(order)}">Sync</button></td>
+              order.orderId
+          }" data-order="${b64Encode(order)}">Sync</button></td>
                   </tr>
                `);
         }
@@ -509,13 +595,13 @@ $(document).on("click", "#sync-order", async function () {
     $(`.sync-order-item[data-order-id="${order.orderId}"]`).addClass("loader");
   }
 
-  const isAuto = getCookie("_mb_auto");
-  const autoKey = getCookie("_mb_auto_key");
+  const { _mb_auto: isAuto, _mb_auto_key: autoKey } = await getStorageData(["_mb_auto", "_mb_auto_key"]); // Dòng mới
+
   // send order ids to background
   chrome.runtime.sendMessage({
     message: "syncOrderToMB",
     data: {
-      apiKey: getCookie(mbApi),
+      apiKey: await getMbApiFromStorage(),
       orders,
       markSynced: isAuto && autoKey,
     },
@@ -537,7 +623,7 @@ $(document).on("click", ".sync-order-item", async function () {
   chrome.runtime.sendMessage({
     message: "syncOrderToMB",
     data: {
-      apiKey: getCookie(mbApi),
+      apiKey: await getMbApiFromStorage(),
       orders,
     },
   });
@@ -602,7 +688,7 @@ $(document).on("click", "#revert-order", async function () {
   $(this).addClass("loader");
   for (const order of orders) {
     $(`.revert-order-item[data-order-id="${order.orderId}"]`).addClass(
-      "loader",
+        "loader",
     );
   }
 
@@ -610,7 +696,7 @@ $(document).on("click", "#revert-order", async function () {
   chrome.runtime.sendMessage({
     message: "deleteIgnoreOrder",
     data: {
-      apiKey: getCookie(mbApi),
+      apiKey: await getMbApiFromStorage(),
       orders,
     },
   });
@@ -631,7 +717,7 @@ $(document).on("click", ".revert-order-item", async function () {
   chrome.runtime.sendMessage({
     message: "deleteIgnoreOrder",
     data: {
-      apiKey: getCookie(mbApi),
+      apiKey: await getMbApiFromStorage(),
       orders,
     },
   });

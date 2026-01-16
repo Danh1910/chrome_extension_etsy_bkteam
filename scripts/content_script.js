@@ -1,6 +1,27 @@
+// File: scripts/content_script.js
+
+// Thêm hàm này vào đầu file
+const getMbApiFromStorage = () =>
+    new Promise((resolve) => {
+      const mbApi = "MBApi";
+      chrome.storage.local.get(mbApi).then((result) => {
+        resolve(result[mbApi]);
+      });
+    });
+
 // receive message from injected script
+// DÁN HÀM MỚI NÀY VÀO
 window.addEventListener("message", function (e) {
-  const { data } = e.data || {};
+  // Chỉ xử lý tin nhắn từ chính trang web và có đúng định dạng mình cần
+  if (e.source !== window || !e.data || e.data.type !== "FROM_MY_EXTENSION") {
+    return;
+  }
+
+  // Nếu đúng tin nhắn của mình thì mới lấy data và gửi đi
+  const { data } = e.data;
+
+  console.log("CONTENT_SCRIPT.JS: Received correct message, sending to background:", data); // Dòng debug
+
   chrome.runtime.sendMessage({
     message: "orderInfo",
     data,
@@ -12,31 +33,10 @@ const addonCollapsible = "AddonCollapsible";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const setCookie = (name, value) => {
-  // remove cookie
-  const cookieArr = document.cookie.split(";");
-  for (var i = 0; i < cookieArr.length; i++) {
-    const cookiePair = cookieArr[i].split("=");
-    if ([mbApi, addonCollapsible].includes(cookiePair[0].trim())) {
-      document.cookie = name + "=" + ";expires=Thu, 01 Jan 1970 00:00:01 GMT";
-    }
-  }
+const getStorageData = (keys) => new Promise((resolve) => chrome.storage.local.get(keys, (result) => resolve(result)));
+const setStorageData = (data) => new Promise((resolve) => chrome.storage.local.set(data, () => resolve()));
+const removeStorageData = (keys) => new Promise((resolve) => chrome.storage.local.remove(keys, () => resolve()));
 
-  let cookie = name + "=" + encodeURIComponent(value);
-  cookie += "; max-age=" + 365 * 24 * 60 * 60;
-  document.cookie = cookie;
-};
-
-const getCookie = (name) => {
-  const cookieArr = document.cookie.split(";");
-  for (var i = 0; i < cookieArr.length; i++) {
-    const cookiePair = cookieArr[i].split("=");
-    if (name == cookiePair[0].trim()) {
-      return decodeURIComponent(cookiePair[1]);
-    }
-  }
-  return null;
-};
 
 const notifySuccess = (message) => {
   $.toast({
@@ -60,7 +60,7 @@ const notifyError = (message) => {
 };
 
 const checkAddonCollapse = async () => {
-  const isOpen = getCookie(addonCollapsible);
+  const { [addonCollapsible]: isOpen } = await getStorageData(addonCollapsible); // Dòng mới
   if (isOpen === false) {
     if ($("#om-collapsible").hasClass("om-active"))
       $("#om-collapsible").click();
@@ -165,7 +165,7 @@ const initAddon = async () => {
   // embedding addon into etsy
   if (!window.location.href.includes("/your/orders/sold")) return;
   // check has api token
-  const apiKey = getCookie(mbApi);
+  const apiKey = await getMbApiFromStorage();
   if (!apiKey) {
     notifyError("" +
         "Please enter MB api key.");
@@ -220,8 +220,9 @@ $(document).on("click", "#om-collapsible", function () {
     content.style.width = "500px";
     content.style.height = "auto";
   }
-  if ($(this).hasClass("om-active")) setCookie(addonCollapsible, true);
-  else setCookie(addonCollapsible, false);
+  // Dòng mới: Lưu vào storage
+  const isActive = $(this).hasClass("om-active");
+  setStorageData({ [addonCollapsible]: isActive });
 });
 
 // open tabs
@@ -246,7 +247,7 @@ chrome.runtime.onMessage.addListener(async function (req, sender, res) {
       res({ message: "received" });
       chrome.runtime.sendMessage({
         message: "getApiKey",
-        data: getCookie(mbApi),
+        data: await getMbApiFromStorage(),
       });
       break;
     default:
@@ -260,20 +261,10 @@ chrome.runtime.onMessage.addListener(async function (req, sender, res) {
   switch (message) {
     case "popupSaveApiKey":
       res({ message: "received" });
-      setCookie(mbApi, data);
-      initAddon();
-      chrome.runtime.sendMessage({
-        message: "listedSaveApiKey",
-        data: getCookie(mbApi),
-      });
+      notifySuccess("API Key saved. Page will reload.");
+      setTimeout(() => window.location.reload(), 1000); // Đợi 1s rồi reload
       break;
-    case "popupGetApiKey":
-      res({ message: "received" });
-      chrome.runtime.sendMessage({
-        message: "popupGetApiKeyValue",
-        data: getCookie(mbApi),
-      });
-      break;
+
     default:
       break;
   }

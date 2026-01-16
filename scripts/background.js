@@ -38,15 +38,15 @@ const sendToContentScript = (msg, data) =>
     });
   });
 
-const getMBApiKey = () =>
-  new Promise(async (resolve) => {
-    const isSended = await sendToContentScript("getApiKey", null);
-    if (!isSended) resolve(null);
-    chrome.runtime.onMessage.addListener(async (req, sender, res) => {
-      const { message, data } = req || {};
-      if (message === "getApiKey" && data) resolve(data);
+// DÁN HÀM MỚI NÀY VÀO
+const getMBApiKey = () => {
+  return new Promise((resolve) => {
+    // Trực tiếp lấy key từ storage, không cần hỏi ai cả
+    chrome.storage.local.get("MBApi", (result) => {
+      resolve(result.MBApi);
     });
   });
+};
 
 const API_KEY_SPECIAL = ["etsyapi-962d89a0-f2f9-4919-9854-e9be5f3325ca"];
 
@@ -143,32 +143,31 @@ const getOrders = (data, mbApiKey) => {
   };
 
   const convertEstimatedDelivery = (deliveryDateStr) => {
-    // Regular expression to match both cases with month before and after day(s)
-    const dateMatch = deliveryDateStr.match(/(\d+)?-?(\d+)?\s?(\w+)?(\d+)?/);
+    // Regex này được thiết kế riêng cho các định dạng như "Jun 23-25" hoặc "Jun 23"
+    // Groups: 1=Tháng, 2=Ngày bắt đầu, 3=Ngày kết thúc (nếu có)
+    const dateMatch = deliveryDateStr.match(/(\w+)\s(\d+)(?:-(\d+))?/);
 
     if (dateMatch) {
-      let dayStart, dayEnd, month;
+      const month = dateMatch[1];      // Lấy ra tháng, ví dụ: "Jun"
+      const dayEnd = dateMatch[3] || dateMatch[2]; // Lấy ngày kết thúc, nếu không có thì lấy ngày bắt đầu
 
-      // Handle case when month is before day(s)
-      if (isNaN(dateMatch[1])) {
-        month = dateMatch[1];  // Extract month (e.g., "Sep")
-        dayStart = dateMatch[2]; // Extract start day (e.g., "21")
-        dayEnd = dateMatch[3] || dayStart; // Extract end day (e.g., "23" or default to dayStart)
-      }
-      // Handle case when day(s) come before month
-      else {
-        dayStart = dateMatch[1]; // Extract start day (e.g., "21")
-        dayEnd = dateMatch[2] || dayStart; // Extract end day (e.g., "23" or default to dayStart)
-        month = dateMatch[3]; // Extract month (e.g., "Sep")
-      }
+      // Lấy năm hiện tại
+      const currentYear = new Date().getFullYear();
 
-      // Combine the end day, month, and current year
-      const fullDateStr = `${month} ${dayEnd}, ${new Date().getFullYear()}`;
+      // Tạo chuỗi ngày tháng đầy đủ để convert
+      // Ví dụ: "Jun 25, 2025"
+      const fullDateStr = `${month} ${dayEnd}, ${currentYear}`;
+
       const dateObj = new Date(fullDateStr);
 
-      // Return in ISO 8601 format
-      return dateObj.toISOString();
+      // Kiểm tra xem date có hợp lệ không trước khi trả về
+      if (!isNaN(dateObj.getTime())) {
+        // Trả về định dạng ISO 8601 (UTC)
+        return dateObj.toISOString();
+      }
     }
+
+    // Nếu không match hoặc ngày không hợp lệ, trả về null
     return null;
   };
 
@@ -207,7 +206,7 @@ const getOrders = (data, mbApiKey) => {
     // Get estimated delivery date in ISO format (taking last day of the range)
     const estimatedDeliveryDate = order.fulfillment?.status?.physical_status?.estimated_delivery_date
         ? convertEstimatedDelivery(order.fulfillment.status.physical_status.estimated_delivery_date)
-        : 'No delivery date';
+        : '';
 
     // Get ship by date in ISO 8601 format from expected_ship_date
     const shipByDate = order.fulfillment?.status?.physical_status?.shipping_status?.expected_ship_date

@@ -2,8 +2,8 @@
 "update_url": "https://clients2.google.com/service/update2/crx",
 
    "manifest_version": 3,
-   "name": "Bkteam Etsy Helper v3",
-   "version": "1.0.3",
+   "name": "Bkteam Etsy Helper v4",
+   "version": "1.0.4",
    "description": "An extension to help you fulfill Etsy orders easier with Bkteam.",
    "devtools_page": "devtool/devtool.html",
    "icons": {
@@ -42,7 +42,7 @@
       "extension_pages": "script-src 'self'; object-src 'self'",
       "sandbox": "sandbox allow-scripts; script-src 'self' 'https://www.etsy.com/*'; object-src 'self'"
    },
-   "permissions": ["scripting"],
+   "permissions": ["storage", "scripting"],
    "host_permissions": [
       "https://www.etsy.com/*",
       "https://bkteam.top/dungvuong-admin/*",

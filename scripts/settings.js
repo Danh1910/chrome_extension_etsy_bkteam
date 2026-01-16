@@ -1,5 +1,6 @@
-$(document).ready(function () {
-   let currencyConvert = getCookie("currencyConvert");
+$(document).ready(async function () { // Thêm async
+   let { currencyConvert } = await getStorageData("currencyConvert"); // Dòng mới
+
    if (currencyConvert && typeof currencyConvert === "string") {
       currencyConvert = JSON.parse(currencyConvert);
       convert = !!currencyConvert.checked;
@@ -13,6 +14,6 @@ $(document).ready(function () {
       var value = $("#change-result").val();
       if (value) value.replace(",", ".");
       notifySuccess("Settings success.");
-      setCookie("currencyConvert", JSON.stringify({ checked, value }));
+      setStorageData({ currencyConvert: JSON.stringify({ checked, value }) }); // Dòng mới
    });
 });
