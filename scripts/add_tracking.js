@@ -208,39 +208,49 @@ const executeAddTracking = async (orderId, tracking, carrier = "") => {
       notifyError("Could not detect carrier from tracking.");
       return;
    }
-   // click btn update progress
-   // const btnUpdateProgressXpath = `.flag-img [role="tablist"][data-order-id="${orderId}"] .wt-mb-xs-1:nth-child(2) button`;
-   const btnUpdateProgressXpath = `.flag-img[data-order-id="${orderId}"] [data-test-id="no-user-defined-steps-update-progress-button"] button`;
+   
+      // click btn update progress
+   const getOrderRow = () =>
+      $(`#browse-view .panel-body-row button[orderid="${orderId}"]`).closest(
+         ".panel-body-row",
+      );
+   const getUpdateProgressBtn = () =>
+      getOrderRow()
+         .find('[data-test-id="no-user-defined-steps-update-progress-button"] button')
+         .first();
+   const getProgressOptionBtn = () =>
+      getOrderRow().find(".list-unstyled li:last-child .btn-primary").first();
+
    let timeOutBtnUpdateProgress = 0;
    while (true) {
       if (timeOutBtnUpdateProgress == 60) {
          notifyError("Order not found.");
          return;
       }
-      if ($(btnUpdateProgressXpath).length) break;
+      if (getUpdateProgressBtn().length) break;
       await sleep(500);
       timeOutBtnUpdateProgress++;
    }
-   $(btnUpdateProgressXpath).trigger("click");
+   getUpdateProgressBtn().trigger("click");
    // check has option progress
-   const progressOptionXpath = `.flag-img[data-order-id="${orderId}"] .list-unstyled li:last-child .btn-primary`;
-   if ($(progressOptionXpath).length) {
+   if (getProgressOptionBtn().length) {
       let timeOutOrderInfo = 0;
       while (true) {
          if (timeOutOrderInfo == 60) {
             notifyError("Could not open progress options.");
             return;
          }
-         if ($(progressOptionXpath).length) break;
+         if (getProgressOptionBtn().length) break;
          await sleep(500);
          timeOutOrderInfo++;
       }
       // click btn complete order
-      const btnCompleteElem = document.querySelector(progressOptionXpath);
+      const btnCompleteElem = getProgressOptionBtn().get(0);
       const btnCompleteEvent = document.createEvent("HTMLEvents");
       btnCompleteEvent.initEvent("click", true, true);
       btnCompleteElem.dispatchEvent(btnCompleteEvent);
    }
+
    // wait modal add tracking
    let timeOutModalTracking = 0;
    while (true) {
