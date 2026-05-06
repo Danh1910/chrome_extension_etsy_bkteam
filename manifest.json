@@ -3,7 +3,7 @@
 
    "manifest_version": 3,
    "name": "Bkteam Etsy Helper v5",
-   "version": "1.0.5",
+   "version": "1.0.6",
    "description": "An extension to help you fulfill Etsy orders easier with Bkteam.",
    "devtools_page": "devtool/devtool.html",
    "icons": {

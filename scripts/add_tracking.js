@@ -209,15 +209,52 @@ const executeAddTracking = async (orderId, tracking, carrier = "") => {
       return;
    }
    
-      // click btn update progress
-   const getOrderRow = () =>
-      $(`#browse-view .panel-body-row button[orderid="${orderId}"]`).closest(
-         ".panel-body-row",
-      );
-   const getUpdateProgressBtn = () =>
-      getOrderRow()
-         .find('[data-test-id="no-user-defined-steps-update-progress-button"] button')
-         .first();
+   // click btn update progress
+   const getOrderRow = () => {
+      // Legacy Etsy DOM.
+      const rowByLegacyBtn = $(
+         `#browse-view .panel-body-row button[orderid="${orderId}"]`,
+      ).closest(".panel-body-row");
+      if (rowByLegacyBtn.length) return rowByLegacyBtn.first();
+
+      // Newer Etsy DOM may not expose button[orderid].
+      const rows = $("#browse-view .panel-body-row");
+      const normalizedOrderId = String(orderId).replace(/\D/g, "");
+      for (let i = 0; i < rows.length; i++) {
+         const row = rows.eq(i);
+         const anchors = row.find("a[href]");
+         for (let j = 0; j < anchors.length; j++) {
+            const a = anchors.eq(j);
+            const href = String(a.attr("href") || "");
+            const textId = String(a.text() || "").replace(/\D/g, "");
+            if (
+               href.includes(`id=${orderId}`) ||
+               href.includes(`order_id=~${orderId}`) ||
+               textId === normalizedOrderId
+            ) {
+               return row;
+            }
+         }
+      }
+      return $();
+   };
+   const getUpdateProgressBtn = () => {
+      const row = getOrderRow();
+      if (!row.length) return $();
+
+      const selectors = [
+         // Legacy Etsy DOM.
+         '[data-test-id="no-user-defined-steps-update-progress-button"] button',
+         // New Etsy DOM where the clickable node is the host.
+         '[data-test-id="no-user-defined-steps-update-progress-button"][role="button"]',
+         '[data-test-id="no-user-defined-steps-update-progress-button"]',
+      ];
+      for (const selector of selectors) {
+         const elem = row.find(selector).first();
+         if (elem.length) return elem;
+      }
+      return $();
+   };
    const getProgressOptionBtn = () =>
       getOrderRow().find(".list-unstyled li:last-child .btn-primary").first();
 
@@ -231,7 +268,12 @@ const executeAddTracking = async (orderId, tracking, carrier = "") => {
       await sleep(500);
       timeOutBtnUpdateProgress++;
    }
-   getUpdateProgressBtn().trigger("click");
+   const updateProgressBtn = getUpdateProgressBtn();
+   if (updateProgressBtn.length) {
+      const btn = updateProgressBtn.get(0);
+      if (btn && typeof btn.click === "function") btn.click();
+      else updateProgressBtn.trigger("click");
+   }
    // check has option progress
    if (getProgressOptionBtn().length) {
       let timeOutOrderInfo = 0;
