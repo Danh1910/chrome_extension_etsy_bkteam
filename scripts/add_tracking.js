@@ -370,42 +370,53 @@ const executeAddTracking = async (orderId, tracking, carrier = "") => {
 
    $select.dispatchEvent(carrierEvent);
 
+   const getOrderTextInput = (fieldName) => {
+      const inputName = `${fieldName}-${orderId}`;
+      const lightDomInput = document.querySelector(`input[name="${inputName}"]`);
+      if (lightDomInput) return lightDomInput;
+
+      const inputHost = document.querySelector(
+         `clg-text-input[name="${inputName}"]`,
+      );
+      return inputHost?.shadowRoot?.querySelector("input") || null;
+   };
+
    if (carrierCode === -1 && carrierName) {
       await sleep(1000);
-      const carrierXpath = `#mark-as-complete-overlay input[name="carrierName-${orderId}"]`;
+      let carrierInputEle = null;
       let timeOutTrackingInput = 0;
       while (true) {
          if (timeOutTrackingInput == 30) {
             notifyError("Could not find carrier input.");
             return;
          }
-         if ($(carrierXpath).length) break;
+         carrierInputEle = getOrderTextInput("carrierName");
+         if (carrierInputEle) break;
          await sleep(500);
          timeOutTrackingInput++;
       }
-      const carrierInputEle = $(carrierXpath);
       carrierInputEle.focus();
-      carrierInputEle.val("");
+      carrierInputEle.value = "";
       document.execCommand("insertText", false, carrierName);
       carrierInputEle.blur();
    }
    await sleep(1000);
 
    // enter tracking
-   const trackingXpath = `#mark-as-complete-overlay input[name="trackingCode-${orderId}"]`;
+   let trackingInputElem = null;
    let timeOutTrackingInput = 0;
    while (true) {
       if (timeOutTrackingInput == 30) {
          notifyError("Could not find tracking input.");
          return;
       }
-      if ($(trackingXpath).length) break;
+      trackingInputElem = getOrderTextInput("trackingCode");
+      if (trackingInputElem) break;
       await sleep(500);
       timeOutTrackingInput++;
    }
-   const trackingInputElem = $(trackingXpath);
    trackingInputElem.focus();
-   trackingInputElem.val("");
+   trackingInputElem.value = "";
    document.execCommand("insertText", false, tracking);
    trackingInputElem.blur();
 
