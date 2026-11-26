@@ -3,7 +3,7 @@
 
    "manifest_version": 3,
    "name": "Bkteam Etsy Helper",
-   "version": "1.0.8",
+   "version": "1.0.9",
    "description": "An extension to help you fulfill Etsy orders easier with Bkteam.",
    "devtools_page": "devtool/devtool.html",
    "icons": {
@@ -20,6 +20,12 @@
    },
    "default_locale": "en",
    "content_scripts": [
+      {
+         "matches": ["https://www.etsy.com/*"],
+         "js": ["injected.js"],
+         "world": "MAIN",
+         "run_at": "document_start"
+      },
       {
          "matches": ["https://www.etsy.com/*", "https://www.yuntrack.com/*"],
          "js": [

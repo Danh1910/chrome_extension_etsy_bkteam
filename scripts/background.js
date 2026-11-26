@@ -738,7 +738,7 @@ chrome.runtime.onConnect.addListener(function (port) {
 
 // message from `content_script`
 chrome.runtime.onMessage.addListener(async (req, sender) => {
-  const { message, data, source } = req || {};
+  const { message, data, source, seq } = req || {};
   switch (message) {
     case "orderInfo": {
       // Trả về đúng tab đã gửi. Trước đây gửi cho "tab đang active" — người dùng
@@ -746,7 +746,8 @@ chrome.runtime.onMessage.addListener(async (req, sender) => {
       const tabId = sender?.tab?.id;
       const reply = (msg, payload) =>
         tabId != null ? sendMessage(tabId, msg, payload) : sendToContentScript(msg, payload);
-      const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      // seq do content gửi kèm: content bỏ qua kết quả của lần đọc cũ (lật trang nhanh 2 → 3).
+      const runId = seq || `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
       const mbApiKey = await getMBApiKey();
       if (!mbApiKey) {
@@ -839,13 +840,10 @@ const openOrderPage = () => {
 chrome.runtime.onInstalled.addListener(details => {
   openOrderPage();
 
-  const script = {
-    id: 'injected',
-    matches: ["https://www.etsy.com/*", "https://www.yuntrack.com/*"],
-    js: ['injected.js'],
-    world: 'MAIN',
-    runAt: 'document_start'
-  }
-
-  chrome.scripting.registerContentScripts([script])
+  // injected.js giờ khai báo tĩnh trong manifest (world MAIN). Bản cũ đăng ký động ở đây
+  // chỉ một lần lúc cài, không bắt lỗi — hỏng là không bắt được request đơn nữa.
+  // Gỡ bản đăng ký động cũ (nếu còn) để script không bị tiêm 2 lần.
+  chrome.scripting
+    .unregisterContentScripts({ ids: ["injected"] })
+    .catch(() => {});
 });

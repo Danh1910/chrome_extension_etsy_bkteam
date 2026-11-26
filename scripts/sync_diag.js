@@ -13,6 +13,7 @@ const BK_DIAG = {
   // | no_api_key | parse_error | no_data | no_response | context_lost
   stage: "waiting",
   source: null,
+  sourceMeta: {}, // { limit, offset, refetch } của request Etsy
   extractedCount: null,
   rawCount: null,
   cancelled: 0,
@@ -25,6 +26,7 @@ const BK_DIAG = {
   checkingSince: null,
   checkedAt: null,
   doneRunId: null,
+  currentSeq: null, // lần đọc mới nhất đã gửi sang background
   orderIds: [],
   mbInfos: {},
   ping: null,
@@ -156,6 +158,8 @@ function bkBkteamStatusHtml() {
   switch (d.stage) {
     case "waiting":
       return `<span class="om-diag-muted">Chưa gọi (đang chờ dữ liệu đơn)</span>`;
+    case "refetching":
+      return `<span class="om-diag-spin"></span><span class="om-diag-muted">Đang gọi lại API danh sách đơn của Etsy…</span>`;
     case "sending":
       return `<span class="om-diag-spin"></span><span class="om-diag-muted">Đang gửi dữ liệu đơn sang background…</span>`;
     case "checking":
@@ -254,8 +258,16 @@ function bkRenderDiag() {
         ? `<span class="om-diag-bad">Chưa đọc được đơn từ trang Etsy</span>`
         : `<span class="om-diag-spin"></span><span class="om-diag-muted">Đang chờ dữ liệu đơn từ Etsy…</span>`;
   else
-    found = `<b>${count}</b> đơn <span class="om-diag-muted">(nguồn: ${bkEsc(BK_SOURCE_LABEL[d.source] || d.source || "—")})</span>`;
-  rows.push(bkRow("Đơn trên trang", found));
+    found = `<b>${count}</b> đơn <span class="om-diag-muted">(nguồn: ${bkEsc(bkSourceText())})</span>`;
+  rows.push(bkRow("Đơn đọc được", found));
+
+  const visible = bkVisibleOrderCount();
+  if (visible > 0) {
+    let v = `~<b>${visible}</b> đơn`;
+    if (count != null && visible > count)
+      v += `<div class="om-diag-hint om-diag-warn">Đọc được ít hơn số đơn đang hiện trên trang → bấm "Kiểm tra lại" để đọc lại đúng danh sách.</div>`;
+    rows.push(bkRow("Trang đang hiện", v));
+  }
 
   if (d.toCheck != null) {
     const skipped = [];
@@ -278,10 +290,37 @@ function bkRenderDiag() {
   html += bkOrderListHtml(listOpen);
   $body.html(html);
 
-  const busy = d.stage === "sending" || d.stage === "checking";
+  const busy = d.stage === "sending" || d.stage === "checking" || d.stage === "refetching";
   $("#om-diag-recheck").prop("disabled", busy).toggleClass("loader", busy);
   $("#om-diag-ping").prop("disabled", d.pingRunning).toggleClass("loader", d.pingRunning);
   if (typeof setDivHeight === "function") setDivHeight();
+}
+
+function bkSourceText() {
+  const d = BK_DIAG;
+  const parts = [BK_SOURCE_LABEL[d.source] || d.source || "—"];
+  const m = d.sourceMeta || {};
+  if (m.limit != null) parts.push(`limit ${m.limit}`);
+  if (m.offset != null) parts.push(`offset ${m.offset}`);
+  if (m.refetch) parts.push("gọi lại");
+  return parts.join(" · ");
+}
+
+// Đếm số đơn đang hiện trên giao diện Etsy (link "#<mã đơn>" hoặc button[orderid] của UI cũ).
+function bkVisibleOrderCount() {
+  const ids = new Set();
+  try {
+    $("button[orderid]").each((_, el) => {
+      const id = $(el).attr("orderid");
+      if (id) ids.add(String(id));
+    });
+    document.querySelectorAll("a").forEach((a) => {
+      if (a.closest(".om-addon")) return;
+      const m = (a.textContent || "").trim().match(/^#(d{8,})$/);
+      if (m) ids.add(m[1]);
+    });
+  } catch (e) {}
+  return ids.size;
 }
 
 function bkDiagNote(text) {
@@ -328,12 +367,16 @@ function bkDiagInit() {
 }
 
 // Gọi từ mainProcess (nguồn html) và content_script.js (nguồn network).
-function bkSendOrderInfo(data, source) {
-  window.__BK_LAST_RAW = { data, source };
+function bkSendOrderInfo(data, source, meta) {
+  window.__BK_LAST_RAW = { data, source, meta: meta || {} };
   clearTimeout(bkWaitTimer);
+  // Danh sách mới (đổi View/lật trang/lọc) thay cho kết quả cũ → dọn bảng để khỏi lẫn đơn.
+  if (["checked", "no_orders", "check_failed"].includes(BK_DIAG.stage) && !$("#sync-order").hasClass("loader"))
+    bkResetTables();
   Object.assign(BK_DIAG, {
     stage: "sending",
     source,
+    sourceMeta: meta || {},
     extractedCount: Array.isArray(data?.orders) ? data.orders.length : 0,
     rawCount: null,
     toCheck: null,
@@ -343,7 +386,9 @@ function bkSendOrderInfo(data, source) {
   });
   bkRenderDiag();
 
-  if (!bkSafeSend({ message: "orderInfo", data, source })) {
+  const seq = `r${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  BK_DIAG.currentSeq = seq;
+  if (!bkSafeSend({ message: "orderInfo", data, source, seq })) {
     bkDiagFail("context_lost", "Extension vừa được cập nhật/tải lại — tải lại trang Etsy (F5) để tiếp tục.");
     return;
   }
@@ -362,6 +407,7 @@ function bkSendOrderInfo(data, source) {
 
 function bkDiagOnProgress(p) {
   if (!p || (p.runId && p.runId === BK_DIAG.doneRunId)) return; // đã có kết quả cuối
+  if (!bkIsCurrentRun(p.runId)) return; // tiến độ của lần đọc cũ
   Object.assign(BK_DIAG, {
     stage: p.stage || "checking",
     source: p.source || BK_DIAG.source,
@@ -375,6 +421,11 @@ function bkDiagOnProgress(p) {
     mbInfos: {},
   });
   bkRenderDiag();
+}
+
+// Kết quả thuộc lần đọc mới nhất? Lật trang nhanh thì kết quả trang trước có thể về sau.
+function bkIsCurrentRun(runId) {
+  return !runId || !BK_DIAG.currentSeq || runId === BK_DIAG.currentSeq;
 }
 
 function bkDiagOnOrdersResult(data) {
@@ -451,11 +502,49 @@ function bkResetTables() {
   if (typeof setTextBtnRevert === "function") setTextBtnRevert();
 }
 
-$(document).on("click", "#om-diag-recheck", function () {
+// Nhờ injected.js gọi lại request danh sách đơn gần nhất của Etsy (đúng View/trang/lọc).
+function bkRefetchOrders(timeoutMs = 10000) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (r) => {
+      if (done) return;
+      done = true;
+      window.removeEventListener("message", onMsg);
+      clearTimeout(timer);
+      resolve(r);
+    };
+    const onMsg = (e) => {
+      if (e.source !== window || e.data?.type !== "BK_REFETCH_RESULT") return;
+      finish({ ok: !!e.data.ok, reason: e.data.reason, count: e.data.count });
+    };
+    const timer = setTimeout(() => finish({ ok: false, reason: "timeout" }), timeoutMs);
+    window.addEventListener("message", onMsg);
+    window.postMessage({ type: "BK_REFETCH_ORDERS" });
+  });
+}
+
+const BK_REFETCH_REASON = {
+  no_request:
+    "Chưa bắt được request danh sách đơn của Etsy kể từ lúc mở trang → đang dùng dữ liệu cũ (HTML lúc tải trang, chỉ trang đầu). Đổi View/lật trang một lần hoặc F5 để extension đọc đúng danh sách.",
+  timeout: "Script bắt request của Etsy (injected.js) không phản hồi → đang dùng dữ liệu cũ. Tải lại trang (F5).",
+};
+
+$(document).on("click", "#om-diag-recheck", async function () {
   if ($("#sync-order").hasClass("loader")) {
     notifyError("Đang sync đơn, đợi xong rồi hãy kiểm tra lại.");
     return;
   }
+  bkResetTables();
+  clearTimeout(bkWaitTimer);
+  Object.assign(BK_DIAG, { stage: "refetching", note: null, error: null });
+  bkRenderDiag();
+
+  // 1) Lấy lại danh sách mới từ Etsy — thành công thì injected.js tự post dữ liệu,
+  //    content_script.js chuyển vào bkSendOrderInfo như bình thường.
+  const r = await bkRefetchOrders();
+  if (r.ok) return;
+
+  // 2) Không gọi lại được → dùng dữ liệu đã đọc trước đó (hoặc Etsy.Context trong HTML).
   let raw = window.__BK_LAST_RAW;
   if (!raw && typeof extractDataFromAllScripts === "function") {
     const fromHtml = extractDataFromAllScripts();
@@ -468,8 +557,8 @@ $(document).on("click", "#om-diag-recheck", function () {
     );
     return;
   }
-  bkResetTables();
-  bkSendOrderInfo(raw.data, raw.source);
+  bkSendOrderInfo(raw.data, raw.source, raw.meta);
+  bkDiagNote(BK_REFETCH_REASON[r.reason] || `Gọi lại API Etsy lỗi (${r.reason}) → đang dùng dữ liệu đã đọc trước đó.`);
 });
 
 $(document).on("click", "#om-diag-ping", function () {
@@ -505,6 +594,8 @@ $(document).on("click", "#om-diag-copy", async function () {
     online: navigator.onLine,
     stage: d.stage,
     source: d.source,
+    sourceMeta: d.sourceMeta,
+    visibleOnPage: bkVisibleOrderCount(),
     rawCount: d.rawCount ?? d.extractedCount,
     cancelled: d.cancelled,
     completed: d.completed,

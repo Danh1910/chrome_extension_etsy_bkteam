@@ -18,13 +18,13 @@ window.addEventListener("message", function (e) {
   }
 
   // Nếu đúng tin nhắn của mình thì mới lấy data và gửi đi
-  const { data } = e.data;
+  const { data, meta } = e.data;
 
   console.log("CONTENT_SCRIPT.JS: Received correct message, sending to background:", data); // Dòng debug
 
-  // bkSendOrderInfo (sync_order.js) ghi nhận số đơn lên panel chẩn đoán rồi mới gửi đi.
+  // bkSendOrderInfo (sync_diag.js) ghi nhận số đơn lên panel chẩn đoán rồi mới gửi đi.
   if (typeof bkSendOrderInfo === "function") {
-    bkSendOrderInfo(data, "network");
+    bkSendOrderInfo(data, "network", meta);
     return;
   }
   chrome.runtime.sendMessage({

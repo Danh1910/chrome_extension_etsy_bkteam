@@ -47,6 +47,12 @@ const extractDataFromAllScripts = () => {
 
 // Hàm này sẽ được gọi để bắt đầu toàn bộ quá trình
 const mainProcess = () => {
+  // Đã bắt được request danh sách đơn của Etsy (đúng View/trang đang xem) thì không
+  // đè lại bằng Etsy.Context trong HTML — HTML chỉ chứa trang đầu lúc tải trang.
+  if (window.__BK_LAST_RAW?.source === "network") {
+    console.log('[DEBUG-ETS-CS] 3. Đã có dữ liệu từ request mạng, bỏ qua Etsy.Context.');
+    return;
+  }
   console.log('[DEBUG-ETS-CS] 3. Bắt đầu quá trình trích xuất.');
   const rawOrderData = extractDataFromAllScripts();
   console.log('[DEBUG-ETS-CS] 5. Kết quả cuối cùng:', rawOrderData);
@@ -415,6 +421,10 @@ chrome.runtime.onMessage.addListener(async function (req, sender, res) {
       return;
     }
     console.log('[DEBUG-ETS-CS] 9. Nhận được dữ liệu đã xử lý từ background. Bắt đầu hiển thị ra bảng.', data);
+    if (!bkIsCurrentRun(data?.diag?.runId)) {
+      console.log('[DEBUG-ETS-CS] Bỏ qua kết quả của lần đọc cũ:', data?.diag?.runId);
+      return;
+    }
     bkDiagOnOrdersResult(data);
     const { error } = data || {};
     if (error) {
