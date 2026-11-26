@@ -3,7 +3,7 @@
 
    "manifest_version": 3,
    "name": "Bkteam Etsy Helper",
-   "version": "1.0.7",
+   "version": "1.0.8",
    "description": "An extension to help you fulfill Etsy orders easier with Bkteam.",
    "devtools_page": "devtool/devtool.html",
    "icons": {
@@ -27,6 +27,7 @@
             "assets/libs/jquery.toast.js",
             "scripts/content_script.js",
             "scripts/sync_order.js",
+            "scripts/sync_diag.js",
             "scripts/add_tracking.js",
             "scripts/settings.js",
             "scripts/etsy-marketing/change-style.js"

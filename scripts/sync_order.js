@@ -53,13 +53,11 @@ const mainProcess = () => {
 
   if (rawOrderData) {
     console.log('[DEBUG-ETS-CS] 6. Gửi dữ liệu thô lên background để xử lý.');
-    chrome.runtime.sendMessage({
-      message: "orderInfo",
-      data: rawOrderData
-    });
+    bkSendOrderInfo(rawOrderData, "html");
     // alert("Đã tìm thấy dữ liệu đơn hàng từ HTML và gửi đi xử lý.");
   } else {
     console.log('[DEBUG-ETS-CS] 7. Không tìm thấy dữ liệu trong HTML. Sẽ dựa vào cơ chế cũ (bắt request mạng).');
+    bkDiagNote("HTML trang không chứa dữ liệu đơn (Etsy.Context) — đang chờ request mạng của Etsy.");
   }
 }
 
@@ -131,9 +129,11 @@ const addStatusLabel = (orderInfos) => {
     const p = $(btn).closest(".flag-img");
     $(p).attr("data-order-id", orderId);
     const addLabelXpath = ".flag .col-group .col-md-4";
-    item
-        .find(addLabelXpath)
-        .append(`<div class="wt-mt-xs-2 om-order-info"></div>`);
+    // Chỉ tạo khung nhãn một lần — "Kiểm tra lại" gọi lại hàm này nhiều lần.
+    if (!item.find(addLabelXpath + " .om-order-info").length)
+      item
+          .find(addLabelXpath)
+          .append(`<div class="wt-mt-xs-2 om-order-info"></div>`);
     const elem = item.find(addLabelXpath + " .om-order-info");
     const { status, trackingCode } = orderInfos[orderId];
     switch (status) {
@@ -164,6 +164,7 @@ const addStatusLabel = (orderInfos) => {
 
 const removeTableLoading = () => {
   // remove loading
+  $("#not_synced .om-sync-notice").remove();
   $("#not_synced .loader-resp").remove();
   $("#ignored .loader-resp").remove();
   $("#add_tracking .loader-resp").remove();
@@ -414,9 +415,13 @@ chrome.runtime.onMessage.addListener(async function (req, sender, res) {
       return;
     }
     console.log('[DEBUG-ETS-CS] 9. Nhận được dữ liệu đã xử lý từ background. Bắt đầu hiển thị ra bảng.', data);
+    bkDiagOnOrdersResult(data);
     const { error } = data || {};
     if (error) {
       notifyError("Check synced order: " + data.error);
+      // Trước đây chỉ toast rồi return → spinner trong bảng quay mãi.
+      bkShowSyncNotice("Không kiểm tra được trạng thái đơn với BKTeam", error);
+      setDivHeight();
       return;
     }
     appendOrdersIntoTable(data);
@@ -433,17 +438,30 @@ chrome.runtime.onMessage.addListener(async function (req, sender, res) {
     }
   }
 
+  if (message === "syncDiag") {
+    res({ message: "received" });
+    bkDiagOnProgress(data);
+    return;
+  }
+
+  if (message === "bkPingResult") {
+    res({ message: "received" });
+    bkDiagOnPing(data);
+    return;
+  }
+
   if (message === "syncOrderToMB") {
     res({ message: "received" });
     $(".loader").removeClass("loader");
+    bkDiagOnSyncResult(data);
     const {
-      data: { error: message },
+      data: { error: message } = {},
       error,
       orders,
     } = data;
     let hasError = false;
     if (error && Object.keys(error).length > 0) {
-      notifyError(error);
+      notifyError(typeof error === "string" ? error : JSON.stringify(error));
       return;
     }
     for (const order of orders) {

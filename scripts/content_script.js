@@ -22,9 +22,15 @@ window.addEventListener("message", function (e) {
 
   console.log("CONTENT_SCRIPT.JS: Received correct message, sending to background:", data); // Dòng debug
 
+  // bkSendOrderInfo (sync_order.js) ghi nhận số đơn lên panel chẩn đoán rồi mới gửi đi.
+  if (typeof bkSendOrderInfo === "function") {
+    bkSendOrderInfo(data, "network");
+    return;
+  }
   chrome.runtime.sendMessage({
     message: "orderInfo",
     data,
+    source: "network",
   });
 });
 
@@ -194,6 +200,9 @@ const initAddon = async () => {
   );
   // active tab not synced
   $('[data-name="not_synced"]').click();
+
+  // Panel chẩn đoán (sync_order.js): số đơn đọc được + trạng thái gọi BKTeam.
+  if (typeof bkDiagInit === "function") bkDiagInit();
 };
 
 const b64Encode = (obj) => {
@@ -283,6 +292,8 @@ function setDivHeight() {
 
   const tabTop = document.querySelector(".content .om-tab");
   const syncedTab = document.querySelector(".sync-order-wrap .om-tab");
+  const diag = document.querySelector(".sync-order-wrap .om-diag");
+  const notice = document.querySelector("#not_synced .om-sync-notice");
 
   if (tabContent) {
     const blankSpace =
@@ -292,9 +303,11 @@ function setDivHeight() {
       (heading.clientHeight || 39) -
       (button.clientHeight || 64) -
       (omProcessing ? omProcessing.clientHeight : 0) -
+      (diag ? diag.offsetHeight : 0) -
+      (notice ? notice.offsetHeight : 0) -
       5;
 
-    tabContent.style.height = blankSpace + "px";
+    tabContent.style.height = Math.max(blankSpace, 150) + "px";
 
     return true;
   } else {

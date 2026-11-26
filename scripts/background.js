@@ -87,9 +87,12 @@ const convertTime = (orderDate) => {
   return res;
 }; // etsyapi-45fdd139-9a95-4905-a041-a2a916285bef
 
-const getOrders = (data, mbApiKey) => {
+const getOrders = (data, mbApiKey, stats = {}) => {
   const orders = [];
   const mapBuyer = {};
+  stats.rawCount = Array.isArray(data?.orders) ? data.orders.length : 0;
+  stats.cancelled = 0;
+  stats.completed = 0;
   if (!data.buyers || !data.orders) return;
   for (const buyer of data.buyers) {
     mapBuyer[buyer.buyer_id] = buyer;
@@ -194,11 +197,15 @@ const getOrders = (data, mbApiKey) => {
   }
 
   for (const order of data.orders) {
-    if (order.is_canceled) continue;
+    if (order.is_canceled) {
+      stats.cancelled++;
+      continue;
+    }
 
     // case: order's completed (`order.fulfillment.is_complete` = true) => skip
     if (!API_KEY_SPECIAL.includes(mbApiKey)) {
       if (order.fulfillment && order.fulfillment.is_complete) {
+        stats.completed++;
         continue;
       }
     }
@@ -307,31 +314,208 @@ const getOrders = (data, mbApiKey) => {
   return orders;
 };
 
-const sendRequestToMB = async (endPoint, apiKey, data) => {
-  const res = {
-    error: null,
-  };
+// ==================================================================
+//  Gọi API BKTeam — có timeout + chẩn đoán lỗi
+// ==================================================================
+// Trước đây fetch không có timeout: proxy treo kết nối là panel quay loader mãi,
+// còn lỗi thì chỉ còn mỗi chữ "Failed to fetch". requestMB trả kèm `meta` mô tả
+// request (URL, HTTP status, thời gian, loại lỗi) để panel hiện cho người dùng.
+const MB_URL_ALT = MBUrl.startsWith("http:")
+  ? MBUrl.replace(/^http:/, "https:")
+  : MBUrl.replace(/^https:/, "http:");
+// Scheme gọi được gần nhất. Chỉ đổi khi request đối chiếu/test thành công qua scheme kia.
+let preferredMBUrl = MBUrl;
+
+const MB_TIMEOUT_MS = {
+  check: 30000,
+  ping: 15000,
+  create: 120000,
+  default: 60000,
+};
+
+const textSnippet = (text, max = 300) => {
+  const s = String(text || "").replace(/\s+/g, " ").trim();
+  return s.length > max ? s.slice(0, max) + "…" : s;
+};
+
+const requestMB = async ({
+  endPoint,
+  apiKey,
+  body,
+  timeoutMs = MB_TIMEOUT_MS.default,
+  baseUrl,
+}) => {
   if (!apiKey) apiKey = await getMBApiKey();
+  const base = baseUrl || preferredMBUrl;
+  const url = endPoint ? `${base}?case=${endPoint}` : base;
 
-  let url = MBUrl;
-  if (endPoint) {
-    url += `?case=${endPoint}`;
-  }
+  const meta = {
+    url,
+    scheme: url.split(":")[0].toUpperCase(),
+    ok: false,
+    status: null,
+    durationMs: null,
+    errorType: null, // network | timeout | http | invalid_json | server
+    errorMessage: null,
+    rawSnippet: null,
+    redirectedTo: null,
+    at: new Date().toISOString(),
+  };
 
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const resp = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "merchantId": apiKey, // Sử dụng merchantId như một apiKey
+        merchantId: apiKey, // Sử dụng merchantId như một apiKey
       },
-      body: data,
+      body,
+      signal: controller.signal,
     });
-    return await resp.json();
+    meta.status = resp.status;
+    if (resp.redirected) meta.redirectedTo = resp.url;
+    const text = await resp.text();
+    meta.durationMs = Date.now() - startedAt;
+
+    let json = null;
+    try {
+      json = JSON.parse(text);
+    } catch (e) {
+      json = null;
+    }
+
+    if (!resp.ok) {
+      meta.errorType = "http";
+      meta.errorMessage = `HTTP ${resp.status}${resp.statusText ? " " + resp.statusText : ""}`;
+      meta.rawSnippet = textSnippet(text);
+      return { meta, json };
+    }
+    if (json === null || typeof json !== "object") {
+      meta.errorType = "invalid_json";
+      meta.errorMessage = "Phản hồi không phải JSON";
+      meta.rawSnippet = textSnippet(text);
+      return { meta, json: null };
+    }
+    meta.ok = true;
+    return { meta, json };
   } catch (error) {
-    res.error = error.message;
+    meta.durationMs = Date.now() - startedAt;
+    if (error?.name === "AbortError") {
+      meta.errorType = "timeout";
+      meta.errorMessage = `Không phản hồi sau ${Math.round(timeoutMs / 1000)}s`;
+    } else {
+      meta.errorType = "network";
+      meta.errorMessage = error?.message || String(error);
+    }
+    return { meta, json: null };
+  } finally {
+    clearTimeout(timer);
   }
-  return res;
+};
+
+// Diễn giải lỗi cho người dùng: tiêu đề ngắn + gợi ý nguyên nhân.
+const describeMBError = (meta) => {
+  if (!meta || meta.ok) return { title: "", hint: "" };
+  switch (meta.errorType) {
+    case "network":
+      return {
+        title: `Không kết nối được tới BKTeam (${meta.errorMessage})`,
+        hint:
+          "Request không tới được server: mạng/proxy/VPN/firewall đang chặn bkteam.top, DNS không phân giải được, " +
+          "hoặc server đang down. Thử tắt proxy/VPN, đổi mạng, hoặc mở thử link endpoint trên trình duyệt.",
+      };
+    case "timeout":
+      return {
+        title: `BKTeam không phản hồi (${meta.errorMessage})`,
+        hint: "Proxy giữ kết nối mà không trả về, mạng quá chậm, hoặc server đang quá tải.",
+      };
+    case "http": {
+      const s = meta.status;
+      let hint = "Server nhận được request nhưng trả lỗi.";
+      if (s === 407) hint = "Proxy yêu cầu đăng nhập (407) — kiểm tra cấu hình proxy.";
+      else if (s === 403) hint = "Bị chặn (403) — có thể firewall/chống DDoS của server chặn IP hoặc proxy này.";
+      else if (s === 404) hint = "Không tìm thấy endpoint (404) — đường dẫn API đã đổi hoặc proxy chuyển hướng sai.";
+      else if (s >= 500 && s !== 502 && s !== 503 && s !== 504) hint = "Lỗi phía server BKTeam (PHP/DB) — báo kỹ thuật.";
+      else if (s === 502 || s === 503 || s === 504)
+        hint = "Gateway/proxy không lấy được phản hồi từ server (502/503/504) — server down hoặc proxy lỗi.";
+      return { title: `BKTeam trả lỗi ${meta.errorMessage}`, hint };
+    }
+    case "invalid_json":
+      return {
+        title: "BKTeam trả về dữ liệu không đọc được (không phải JSON)",
+        hint:
+          "Thường là trang lỗi/đăng nhập của proxy hoặc nhà mạng chèn vào, hoặc PHP in warning trước JSON. Xem nội dung phản hồi bên dưới.",
+      };
+    case "server":
+      return {
+        title: `BKTeam báo lỗi: ${meta.errorMessage}`,
+        hint: "Kết nối OK nhưng server xử lý lỗi — báo kỹ thuật kèm nội dung này.",
+      };
+    default:
+      return { title: meta.errorMessage || "Lỗi không xác định", hint: "" };
+  }
+};
+
+const attachHint = (meta) => {
+  const { title, hint } = describeMBError(meta);
+  meta.title = title;
+  meta.hint = hint;
+  return meta;
+};
+
+const mbErrorText = (meta) => {
+  const { title, hint } = describeMBError(meta);
+  return hint ? `${title}. ${hint}` : title;
+};
+
+// Wrapper giữ tương thích cho các chỗ gọi cũ: trả về body JSON, lỗi thì { error }.
+const sendRequestToMB = async (endPoint, apiKey, data, timeoutMs) => {
+  const { meta, json } = await requestMB({ endPoint, apiKey, body: data, timeoutMs });
+  if (meta.ok) return json;
+  const base = json && typeof json === "object" ? json : {};
+  return { ...base, error: mbErrorText(meta), __meta: meta };
+};
+
+// Đối chiếu đơn với BKTeam. Lỗi tầng mạng (network/timeout) thì thử thêm scheme kia
+// (http <-> https) vì nhiều mạng/proxy chặn riêng http thường.
+const checkSyncedOrdersOnMB = async (orderIds, apiKey, timeoutMs = MB_TIMEOUT_MS.check) => {
+  const body = JSON.stringify({ originIds: JSON.stringify(orderIds) });
+  const bases = [preferredMBUrl, ...[MBUrl, MB_URL_ALT].filter((u) => u !== preferredMBUrl)];
+  const attempts = [];
+
+  for (const base of bases) {
+    const { meta, json } = await requestMB({
+      endPoint: "checkEtsySyncedOrders",
+      apiKey,
+      body,
+      timeoutMs,
+      baseUrl: base,
+    });
+    if (meta.ok) {
+      let serverError = null;
+      if (json.error) serverError = typeof json.error === "string" ? json.error : JSON.stringify(json.error);
+      else if (Array.isArray(json.errors) && json.errors.length) serverError = json.errors[0]?.message || "errors";
+      else if (json.data == null || typeof json.data !== "object") serverError = "Phản hồi thiếu trường data";
+      if (serverError) {
+        meta.ok = false;
+        meta.errorType = "server";
+        meta.errorMessage = serverError;
+      }
+    }
+    attempts.push(attachHint(meta));
+
+    if (meta.ok) {
+      preferredMBUrl = base;
+      return { ok: true, data: json.data, attempts };
+    }
+    // Lỗi HTTP/JSON/server nghĩa là server đã nhận request — đổi scheme không giúp gì.
+    if (meta.errorType !== "network" && meta.errorType !== "timeout") break;
+  }
+
+  return { ok: false, data: {}, attempts, error: mbErrorText(attempts[attempts.length - 1]) };
 };
 
 // capture event from content script
@@ -367,11 +551,26 @@ chrome.runtime.onMessage.addListener(async (req, sender, res) => {
       input: newOrders,
       merchantId: apiKey  // Thêm merchantId vào query
     });
-    const result = await sendRequestToMB("createEtsyOrder", apiKey, query);
+    const { meta, json } = await requestMB({
+      endPoint: "createEtsyOrder",
+      apiKey,
+      body: query,
+      timeoutMs: MB_TIMEOUT_MS.create,
+    });
+    const result = json && typeof json === "object" ? json : {};
+    // Trước đây lỗi mạng rơi vào result.error (không phải result.errors) nên content
+    // coi như thành công và xoá dòng đơn khỏi bảng. Giờ lỗi kết nối luôn đi vào `error`.
+    let error = result.errors || null;
+    if (!meta.ok) {
+      error = mbErrorText(meta);
+      if (meta.errorType === "timeout")
+        error += " Đơn có thể đã được tạo trên server — bấm \"Kiểm tra lại\" trước khi sync lại.";
+    }
     const resp = {
       orders,
-      data: result,  // Gắn thẳng kết quả server trả về vào 'data'
-      error: result.errors || null,  // Nếu có errors từ server thì gắn vào, nếu không thì null
+      data: result, // Gắn thẳng kết quả server trả về vào 'data'
+      error,
+      request: attachHint(meta),
     };
     sendMessage(sender.tab.id, "syncOrderToMB", resp);
 
@@ -394,9 +593,50 @@ chrome.runtime.onMessage.addListener(async (req, sender, res) => {
     const resp = {
       orders,
       data: result.data ? result.data.deleteIgnoreEtsyOrder : null,
-      error: result.errors ? result.errors[0].message : null,
+      error: result.errors
+        ? result.errors[0].message
+        : result.error
+          ? String(result.error)
+          : !result.data
+            ? "BKTeam không trả dữ liệu"
+            : null,
     };
     sendMessage(sender.tab.id, "deleteIgnoreEtsyOrder", resp);
+  }
+
+  // Nút "Test kết nối BKTeam" trên panel: gọi checkEtsySyncedOrders với danh sách rỗng
+  // (chỉ đọc, server trả { data: [] }) qua cả http và https để biết scheme nào đi được.
+  if (message === "bkPing") {
+    const tabId = sender?.tab?.id;
+    const apiKey = await getMBApiKey();
+    const body = JSON.stringify({ originIds: "[]" });
+    const results = await Promise.all(
+      [MBUrl, MB_URL_ALT].map(async (base) => {
+        const { meta, json } = await requestMB({
+          endPoint: "checkEtsySyncedOrders",
+          apiKey,
+          body,
+          timeoutMs: MB_TIMEOUT_MS.ping,
+          baseUrl: base,
+        });
+        if (meta.ok && json?.error) {
+          meta.ok = false;
+          meta.errorType = "server";
+          meta.errorMessage = String(json.error);
+        }
+        return { base, meta: attachHint(meta) };
+      }),
+    );
+    const firstOk = results.find((r) => r.meta.ok);
+    if (firstOk && !results.find((r) => r.base === preferredMBUrl)?.meta.ok) {
+      preferredMBUrl = firstOk.base;
+    }
+    if (tabId != null)
+      sendMessage(tabId, "bkPingResult", {
+        hasApiKey: !!apiKey,
+        preferredUrl: preferredMBUrl,
+        results: results.map((r) => r.meta),
+      });
   }
   if (message === "fetchTrackChinaToUS") {
     const { endpoint } = data;
@@ -497,39 +737,73 @@ chrome.runtime.onConnect.addListener(function (port) {
 });
 
 // message from `content_script`
-chrome.runtime.onMessage.addListener(async (req) => {
-  const { message, data } = req || {};
+chrome.runtime.onMessage.addListener(async (req, sender) => {
+  const { message, data, source } = req || {};
   switch (message) {
-    case "orderInfo":
-      const mbApiKey = await getMBApiKey();
-      if (!mbApiKey) return;
-      if (!data) break;
-      const orders = getOrders(data, mbApiKey);
-      console.log("orders:", orders);
-      const resp = {
-        orders,
-        mbInfos: {},
-        error: null,
-      };
+    case "orderInfo": {
+      // Trả về đúng tab đã gửi. Trước đây gửi cho "tab đang active" — người dùng
+      // chuyển sang tab khác lúc đang đối chiếu là panel không bao giờ nhận được kết quả.
+      const tabId = sender?.tab?.id;
+      const reply = (msg, payload) =>
+        tabId != null ? sendMessage(tabId, msg, payload) : sendToContentScript(msg, payload);
+      const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
-      if (orders.length === 0) {
-        sendToContentScript("orders", resp);
+      const mbApiKey = await getMBApiKey();
+      if (!mbApiKey) {
+        reply("orders", {
+          orders: [],
+          mbInfos: {},
+          error: "Chưa nhập MB API key — mở popup extension để nhập.",
+          diag: { runId, source, stage: "no_api_key" },
+        });
         return;
       }
-      // check synced orders
-      const query = JSON.stringify({
-        originIds: JSON.stringify(orders.map((o) => o["orderId"]))
-      });
-      const result = await sendRequestToMB("checkEtsySyncedOrders", mbApiKey, query);
-      resp.mbInfos = result.data;
-      resp.error = result.error
-          ? result.error
-          : result.errors
-              ? result.errors[0].message
-              : null;
+      if (!data) break;
 
-      sendToContentScript("orders", resp);
+      const stats = {};
+      let orders = [];
+      try {
+        orders = getOrders(data, mbApiKey, stats) || [];
+      } catch (e) {
+        console.error("[BK] getOrders error:", e);
+        reply("orders", {
+          orders: [],
+          mbInfos: {},
+          error: "Lỗi đọc dữ liệu đơn Etsy: " + (e?.message || e),
+          diag: { runId, source, stage: "parse_error", ...stats },
+        });
+        return;
+      }
+      console.log("orders:", orders);
+
+      const diag = { runId, source, ...stats, toCheck: orders.length, endpoint: preferredMBUrl };
+      if (orders.length === 0) {
+        reply("orders", {
+          orders,
+          mbInfos: {},
+          error: null,
+          diag: { ...diag, stage: "no_orders" },
+        });
+        return;
+      }
+
+      reply("syncDiag", { ...diag, stage: "checking" });
+      const check = await checkSyncedOrdersOnMB(
+        orders.map((o) => o["orderId"]),
+        mbApiKey,
+      );
+      reply("orders", {
+        orders,
+        mbInfos: check.data || {},
+        error: check.ok ? null : check.error,
+        diag: {
+          ...diag,
+          stage: check.ok ? "checked" : "check_failed",
+          attempts: check.attempts,
+        },
+      });
       break;
+    }
     default:
       break;
   }
